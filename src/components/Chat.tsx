@@ -161,6 +161,13 @@ const Chat: React.FC<ChatProps> = ({
       app.workspace.getActiveFile() as TFile | undefined
     );
 
+    // Process embedded PDFs in the message
+    processedUserMessage = await contextProcessor.processEmbeddedPDFs(
+      processedUserMessage,
+      app.vault,
+      fileParserManager
+    );
+
     // Extract Mentions (such as URLs) from original input message only if using Copilot Plus chain
     const urlContextAddition =
       currentChain === ChainType.COPILOT_PLUS_CHAIN

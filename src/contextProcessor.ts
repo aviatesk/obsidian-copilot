@@ -20,7 +20,8 @@ export class ContextProcessor {
     vault: Vault,
     fileParserManager: FileParserManager
   ): Promise<string> {
-    const pdfRegex = /!\[\[(.*?\.pdf)\]\]/g;
+    // Match both ![[file.pdf]] and [[file.pdf]] patterns
+    const pdfRegex = /!?\[\[(.*?\.pdf)\]\]/g;
     const matches = [...content.matchAll(pdfRegex)];
 
     for (const match of matches) {
@@ -38,6 +39,11 @@ export class ContextProcessor {
             `\n\nEmbedded PDF (${pdfName}): [Error: Could not process PDF]\n\n`
           );
         }
+      } else {
+        console.warn("PDF file not found:", {
+          pdfName,
+          availableFiles: vault.getFiles().map((f) => f.path),
+        });
       }
     }
     return content;
@@ -63,15 +69,6 @@ export class ContextProcessor {
           return;
         }
 
-        if (currentChain !== ChainType.COPILOT_PLUS_CHAIN && note.extension !== "md") {
-          if (!fileParserManager.supportsExtension(note.extension)) {
-            console.warn(`Unsupported file type: ${note.extension}`);
-          } else {
-            console.warn(`File type ${note.extension} only supported in Copilot Plus mode`);
-          }
-          return;
-        }
-
         if (!fileParserManager.supportsExtension(note.extension)) {
           console.warn(`Unsupported file type: ${note.extension}`);
           return;
@@ -79,7 +76,7 @@ export class ContextProcessor {
 
         let content = await fileParserManager.parseFile(note, vault);
 
-        if (note.extension === "md" && currentChain === ChainType.COPILOT_PLUS_CHAIN) {
+        if (note.extension === "md") {
           content = await this.processEmbeddedPDFs(content, vault, fileParserManager);
         }
 
@@ -108,7 +105,7 @@ export class ContextProcessor {
   }
 
   async hasEmbeddedPDFs(content: string): Promise<boolean> {
-    const pdfRegex = /!\[\[(.*?\.pdf)\]\]/g;
+    const pdfRegex = /!?\[\[(.*?\.pdf)\]\]/g;
     return pdfRegex.test(content);
   }
 

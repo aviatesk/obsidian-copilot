@@ -2,6 +2,8 @@ import { BrevilabsClient } from "@/LLMProviders/brevilabsClient";
 import { PDFCache } from "@/cache/pdfCache";
 import { logError, logInfo } from "@/logger";
 import { TFile, Vault } from "obsidian";
+import { LocalPDFParser } from "./LocalPDFParser";
+import { getSettings } from "@/settings/model";
 
 interface FileParser {
   supportedExtensions: string[];
@@ -20,10 +22,12 @@ export class PDFParser implements FileParser {
   supportedExtensions = ["pdf"];
   private brevilabsClient: BrevilabsClient;
   private pdfCache: PDFCache;
+  private localParser: LocalPDFParser;
 
   constructor(brevilabsClient: BrevilabsClient) {
     this.brevilabsClient = brevilabsClient;
     this.pdfCache = PDFCache.getInstance();
+    this.localParser = new LocalPDFParser();
   }
 
   async parseFile(file: TFile, vault: Vault): Promise<string> {
@@ -37,12 +41,27 @@ export class PDFParser implements FileParser {
         return cachedResponse.response;
       }
 
-      // If not in cache, read the file and call the API
-      const binaryContent = await vault.readBinary(file);
-      logInfo("Calling pdf4llm API for:", file.path);
-      const pdf4llmResponse = await this.brevilabsClient.pdf4llm(binaryContent);
-      await this.pdfCache.set(file, pdf4llmResponse);
-      return pdf4llmResponse.response;
+      // If user has Plus, try Brevilabs API first
+      if (getSettings().isPlusUser) {
+        try {
+          const binaryContent = await vault.readBinary(file);
+          logInfo("Calling pdf4llm API for:", file.path);
+          const pdf4llmResponse = await this.brevilabsClient.pdf4llm(binaryContent);
+          await this.pdfCache.set(file, pdf4llmResponse);
+          return pdf4llmResponse.response;
+        } catch {
+          // Fall through to local parser
+        }
+      }
+
+      // Use local parser as fallback or for non-Plus users
+      const content = await this.localParser.parseFile(file, vault);
+
+      // Only cache successful results
+      if (!content.startsWith("[Error:")) {
+        await this.pdfCache.set(file, { response: content, elapsed_time_ms: 0 });
+      }
+      return content;
     } catch (error) {
       logError(`Error extracting content from PDF ${file.path}:`, error);
       return `[Error: Could not extract content from PDF ${file.basename}]`;

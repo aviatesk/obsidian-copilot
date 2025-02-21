@@ -166,10 +166,13 @@ const ChatInput = forwardRef<{ focus: () => void }, ChatInputProps>(
             const before = inputMessage.slice(0, cursorPos - 2);
             const after = inputMessage.slice(cursorPos - 1);
 
-            // Check if this note title has duplicates
-            const isUnique = isNoteTitleUnique(note.basename, app.vault);
-            // If the title is unique, just show the title, otherwise show the full path
-            const noteRef = isUnique ? note.basename : note.path;
+            // Always use full path for PDFs, otherwise check for uniqueness
+            const noteRef =
+              note.extension === "pdf"
+                ? note.path
+                : isNoteTitleUnique(note.basename, app.vault)
+                  ? note.basename
+                  : note.path;
             const newInputMessage = `${before}[[${noteRef}]]${after}`;
             setInputMessage(newInputMessage);
 

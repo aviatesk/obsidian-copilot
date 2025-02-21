@@ -1,5 +1,5 @@
 import { App, FuzzyMatch, TFile } from "obsidian";
-import { BaseNoteModal } from "./BaseNoteModal";
+import { BaseNoteModal } from "@/components/modals/BaseNoteModal";
 
 interface AddContextNoteModalProps {
   app: App;
@@ -11,6 +11,7 @@ interface AddContextNoteModalProps {
 export class AddContextNoteModal extends BaseNoteModal<TFile> {
   private onNoteSelect: (note: TFile) => void;
   private titleOnly: boolean;
+  private excludeNotePaths: string[];
 
   constructor({
     app,
@@ -20,20 +21,22 @@ export class AddContextNoteModal extends BaseNoteModal<TFile> {
   }: AddContextNoteModalProps) {
     super(app);
     this.onNoteSelect = onNoteSelect;
-    this.availableNotes = this.getOrderedNotes(excludeNotePaths);
+    this.excludeNotePaths = excludeNotePaths;
     this.titleOnly = titleOnly;
+    this.setPlaceholder("Type note title...");
   }
 
   getItems(): TFile[] {
+    const notes = this.getOrderedNotes(this.excludeNotePaths);
     if (this.titleOnly) {
       // Deduplicate notes by basename
       const uniqueNotes = new Map<string, TFile>();
-      this.availableNotes.forEach((note) => {
+      notes.forEach((note) => {
         uniqueNotes.set(note.basename, note);
       });
       return Array.from(uniqueNotes.values());
     }
-    return this.availableNotes;
+    return notes;
   }
 
   getItemText(note: TFile): string {
