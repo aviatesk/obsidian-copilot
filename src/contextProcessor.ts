@@ -2,6 +2,12 @@ import { ChainType } from "@/chainFactory";
 import { CustomPromptProcessor } from "@/customPromptProcessor";
 import { FileParserManager } from "@/tools/FileParserManager";
 import { TFile, Vault } from "obsidian";
+import { GeminiMessagePart } from "@/LLMProviders/chainManager";
+
+interface PDFProcessingResult {
+  content: string;
+  pdfParts?: GeminiMessagePart[];
+}
 
 export class ContextProcessor {
   private static instance: ContextProcessor;
@@ -18,11 +24,13 @@ export class ContextProcessor {
   async processEmbeddedPDFs(
     content: string,
     vault: Vault,
-    fileParserManager: FileParserManager
-  ): Promise<string> {
+    fileParserManager: FileParserManager,
+    isGeminiModel: boolean = false
+  ): Promise<PDFProcessingResult> {
     // Match both ![[file.pdf]] and [[file.pdf]] patterns
     const pdfRegex = /!?\[\[(.*?\.pdf)\]\]/g;
     const matches = [...content.matchAll(pdfRegex)];
+    const pdfParts: PDFProcessingResult["pdfParts"] = [];
 
     for (const match of matches) {
       const pdfName = match[1];
@@ -30,8 +38,25 @@ export class ContextProcessor {
 
       if (pdfFile instanceof TFile) {
         try {
-          const pdfContent = await fileParserManager.parseFile(pdfFile, vault);
-          content = content.replace(match[0], `\n\nEmbedded PDF (${pdfName}):\n${pdfContent}\n\n`);
+          if (isGeminiModel) {
+            // For Gemini models, we'll collect PDF parts to be sent directly to the model
+            const pdfData = await vault.readBinary(pdfFile);
+            pdfParts.push({
+              inlineData: {
+                data: Buffer.from(pdfData).toString("base64"),
+                mimeType: "application/pdf",
+              },
+            });
+            // Replace the PDF reference with a simple marker
+            content = content.replace(match[0], `\n\n[PDF: ${pdfName}]\n\n`);
+          } else {
+            // For non-Gemini models, use the traditional parser approach
+            const pdfContent = await fileParserManager.parseFile(pdfFile, vault);
+            content = content.replace(
+              match[0],
+              `\n\nEmbedded PDF (${pdfName}):\n${pdfContent}\n\n`
+            );
+          }
         } catch (error) {
           console.error(`Error processing embedded PDF ${pdfName}:`, error);
           content = content.replace(
@@ -46,7 +71,8 @@ export class ContextProcessor {
         });
       }
     }
-    return content;
+
+    return isGeminiModel ? { content, pdfParts } : { content };
   }
 
   async processContextNotes(
@@ -77,7 +103,8 @@ export class ContextProcessor {
         let content = await fileParserManager.parseFile(note, vault);
 
         if (note.extension === "md") {
-          content = await this.processEmbeddedPDFs(content, vault, fileParserManager);
+          const result = await this.processEmbeddedPDFs(content, vault, fileParserManager);
+          content = result.content;
         }
 
         additionalContext += `\n\nTitle: [[${note.basename}]]\nPath: ${note.path}\n\n${content}`;

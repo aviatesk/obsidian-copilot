@@ -30,6 +30,21 @@ import { App, Notice } from "obsidian";
 import ChatModelManager from "./chatModelManager";
 import MemoryManager from "./memoryManager";
 import PromptManager from "./promptManager";
+import { ContextProcessor } from "@/contextProcessor";
+import { getModelKeyFromModel } from "@/settings/model";
+import { FileParserManager } from "@/tools/FileParserManager";
+
+export interface GeminiMessagePart {
+  inlineData?: {
+    data: string;
+    mimeType: string;
+  };
+  text?: string;
+}
+
+export interface ChatMessageWithParts extends ChatMessage {
+  parts?: GeminiMessagePart[];
+}
 
 export default class ChainManager {
   private static chain: RunnableSequence;
@@ -41,14 +56,20 @@ export default class ChainManager {
   public memoryManager: MemoryManager;
   public promptManager: PromptManager;
   public static retrievedDocuments: Document[] = [];
+  private fileParserManager: FileParserManager;
 
-  constructor(app: App, vectorStoreManager: VectorStoreManager) {
+  constructor(
+    app: App,
+    vectorStoreManager: VectorStoreManager,
+    fileParserManager: FileParserManager
+  ) {
     // Instantiate singletons
     this.app = app;
     this.vectorStoreManager = vectorStoreManager;
     this.memoryManager = MemoryManager.getInstance();
     this.chatModelManager = ChatModelManager.getInstance();
     this.promptManager = PromptManager.getInstance();
+    this.fileParserManager = fileParserManager;
 
     // Initialize async operations
     this.initialize();
@@ -224,54 +245,71 @@ export default class ChainManager {
   }
 
   async runChain(
-    userMessage: ChatMessage,
+    message: ChatMessageWithParts,
     abortController: AbortController,
-    updateCurrentAiMessage: (message: string) => void,
-    addMessage: (message: ChatMessage) => void,
-    options: {
-      debug?: boolean;
-      ignoreSystemMessage?: boolean;
-      updateLoading?: (loading: boolean) => void;
-    } = {}
-  ) {
-    const { debug = false, ignoreSystemMessage = false } = options;
+    onTokenStream: (token: string) => void,
+    addMessage: (message: ChatMessageWithParts) => void,
+    options: { debug?: boolean } = {}
+  ): Promise<boolean> {
+    const settings = getSettings();
+    const currentModel = settings.activeModels.find(
+      (model) => getModelKeyFromModel(model) === settings.defaultModelKey
+    );
+    const isGeminiModel = currentModel?.provider === "google";
 
-    if (debug) console.log("==== Step 0: Initial user message ====\n", userMessage);
+    try {
+      const contextProcessor = ContextProcessor.getInstance();
+      const { content, pdfParts } = await contextProcessor.processEmbeddedPDFs(
+        message.message,
+        this.app.vault,
+        this.fileParserManager,
+        isGeminiModel
+      );
 
-    this.validateChatModel();
-    this.validateChainInitialization();
-
-    const chatModel = this.chatModelManager.getChatModel();
-
-    // Handle ignoreSystemMessage
-    if (ignoreSystemMessage || isOSeriesModel(chatModel)) {
-      let effectivePrompt = ChatPromptTemplate.fromMessages([
-        new MessagesPlaceholder("history"),
-        HumanMessagePromptTemplate.fromTemplate("{input}"),
-      ]);
-
-      // TODO: hack for o-series models, to be removed when langchainjs supports system prompt
-      // https://github.com/langchain-ai/langchain/issues/28895
-      if (isOSeriesModel(chatModel)) {
-        effectivePrompt = ChatPromptTemplate.fromMessages([
-          [USER_SENDER, getSystemPrompt() || ""],
-          effectivePrompt,
-        ]);
+      // For Gemini models with PDFs, construct the message parts
+      if (isGeminiModel && pdfParts && pdfParts.length > 0) {
+        const messageParts: GeminiMessagePart[] = [...pdfParts];
+        // Add the text content as the last part
+        messageParts.push({ text: content });
+        message.message = content;
+        message.parts = messageParts;
+      } else {
+        message.message = content;
       }
 
-      this.setChain(getChainType(), {
-        prompt: effectivePrompt,
-      });
-    }
+      this.validateChatModel();
+      this.validateChainInitialization();
 
-    const chainRunner = this.getChainRunner();
-    return await chainRunner.run(
-      userMessage,
-      abortController,
-      updateCurrentAiMessage,
-      addMessage,
-      options
-    );
+      const chatModel = this.chatModelManager.getChatModel();
+
+      // Handle ignoreSystemMessage
+      if (isOSeriesModel(chatModel)) {
+        let effectivePrompt = ChatPromptTemplate.fromMessages([
+          new MessagesPlaceholder("history"),
+          HumanMessagePromptTemplate.fromTemplate("{input}"),
+        ]);
+
+        // TODO: hack for o-series models, to be removed when langchainjs supports system prompt
+        // https://github.com/langchain-ai/langchain/issues/28895
+        if (isOSeriesModel(chatModel)) {
+          effectivePrompt = ChatPromptTemplate.fromMessages([
+            [USER_SENDER, getSystemPrompt() || ""],
+            effectivePrompt,
+          ]);
+        }
+
+        this.setChain(getChainType(), {
+          prompt: effectivePrompt,
+        });
+      }
+
+      const chainRunner = this.getChainRunner();
+      await chainRunner.run(message, abortController, onTokenStream, addMessage, options);
+      return true;
+    } catch (error) {
+      logError(`runChain failed: ${error}`);
+      return false;
+    }
   }
 
   async updateMemoryWithLoadedMessages(messages: ChatMessage[]) {

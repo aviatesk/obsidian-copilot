@@ -68,7 +68,7 @@ export default class CopilotPlugin extends Plugin {
     this.brevilabsClient.setPluginVersion(this.manifest.version);
     checkIsPlusUser();
 
-    this.chainManager = new ChainManager(this.app, this.vectorStoreManager);
+    this.chainManager = new ChainManager(this.app, this.vectorStoreManager, this.fileParserManager);
 
     // Initialize FileParserManager early with other core services
     this.fileParserManager = new FileParserManager(this.brevilabsClient);
